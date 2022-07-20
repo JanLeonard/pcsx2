@@ -116,8 +116,10 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsDialog* dialog, QWidget* 
 	SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.internalResolutionScreenshots, "EmuCore/GS", "InternalResolutionScreenshots", false);
 	SettingWidgetBinder::BindWidgetToFloatSetting(sif, m_ui.zoom, "EmuCore/GS", "Zoom", 100.0f);
 	SettingWidgetBinder::BindWidgetToFloatSetting(sif, m_ui.stretchY, "EmuCore/GS", "StretchY", 100.0f);
-	SettingWidgetBinder::BindWidgetToFloatSetting(sif, m_ui.offsetX, "EmuCore/GS", "OffsetX", 0.0f);
-	SettingWidgetBinder::BindWidgetToFloatSetting(sif, m_ui.offsetY, "EmuCore/GS", "OffsetY", 0.0f);
+	SettingWidgetBinder::BindWidgetToIntSetting(sif, m_ui.cropLeft, "EmuCore/GS", "CropLeft", 0);
+	SettingWidgetBinder::BindWidgetToIntSetting(sif, m_ui.cropTop, "EmuCore/GS", "CropTop", 0);
+	SettingWidgetBinder::BindWidgetToIntSetting(sif, m_ui.cropRight, "EmuCore/GS", "CropRight", 0);
+	SettingWidgetBinder::BindWidgetToIntSetting(sif, m_ui.cropBottom, "EmuCore/GS", "CropBottom", 0);
 
 	connect(m_ui.integerScaling, &QCheckBox::stateChanged, this, &GraphicsSettingsWidget::onIntegerScalingChanged);
 	onIntegerScalingChanged();
@@ -252,7 +254,6 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsDialog* dialog, QWidget* 
 	//////////////////////////////////////////////////////////////////////////
 	SettingWidgetBinder::BindWidgetToIntSetting(sif, m_ui.extraSWThreads, "EmuCore/GS", "extrathreads", 2);
 	SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.swAutoFlush, "EmuCore/GS", "autoflush_sw", true);
-	SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.swAA1, "EmuCore/GS", "aa1", true);
 	SettingWidgetBinder::BindWidgetToBoolSetting(sif, m_ui.swMipmap, "EmuCore/GS", "mipmap", true);
 
 	//////////////////////////////////////////////////////////////////////////
@@ -291,8 +292,29 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsDialog* dialog, QWidget* 
 	// only allow disabling readbacks for per-game settings, it's too dangerous
 	m_ui.disableHardwareReadbacks->setEnabled(m_dialog->isPerGameSettings());
 
+	// allow Texture Offset for per-game settings only 
+	m_ui.textureOffsetX->setEnabled(m_dialog->isPerGameSettings());
+	m_ui.textureOffsetY->setEnabled(m_dialog->isPerGameSettings());
+
+	// allow Skipdraw Range for per-game settings only 
+	m_ui.skipDrawStart->setEnabled(m_dialog->isPerGameSettings());
+	m_ui.skipDrawEnd->setEnabled(m_dialog->isPerGameSettings());
+
 	// Display tab
 	{
+
+		dialog->registerWidgetHelp(m_ui.DisableInterlaceOffset, tr("Disable Interlace Offset"), tr("Unchecked"),
+			tr("Disables interlacing offset which may reduce blurring in some situations."));
+
+		dialog->registerWidgetHelp(m_ui.bilinearFiltering, tr("Bilinear Filtering"), tr("Checked"),
+			tr("Enables bilinear post processing filter. Smooths the overall picture as it is displayed on the screen. Corrects positioning between pixels."));
+
+		dialog->registerWidgetHelp(m_ui.PCRTCOffsets, tr("Screen Offsets"), tr("Unchecked"),
+			tr("Enables PCRTC Offsets which position the screen as the game requests. Useful for some games such as WipEout Fusion for its screen shake effect, but can make the picture blurry."));
+
+		dialog->registerWidgetHelp(m_ui.PCRTCOverscan, tr("Show Overscan"), tr("Unchecked"),
+			tr("Enables the option to show the overscan area on games which draw more than the safe area of the screen."));
+
 		dialog->registerWidgetHelp(m_ui.fmvAspectRatio, tr("FMV Aspect Ratio"), tr("Off (Default)"),
 			tr("Overrides the FMV aspect ratio."));
 	
@@ -356,9 +378,6 @@ GraphicsSettingsWidget::GraphicsSettingsWidget(SettingsDialog* dialog, QWidget* 
 		dialog->registerWidgetHelp(m_ui.swAutoFlush, tr("Auto Flush"), tr("Checked"),
 			tr("Force a primitive flush when a framebuffer is also an input texture. "
 			   "Fixes some processing effects such as the shadows in the Jak series and radiosity in GTA:SA."));
-
-		dialog->registerWidgetHelp(m_ui.swAA1, tr("Edge Anti-Aliasing"), tr("Checked"),
-			tr("Internal GS feature. Reduces edge aliasing of lines and triangles when the game requests it."));
 
 		dialog->registerWidgetHelp(m_ui.swMipmap, tr("Mipmapping"), tr("Checked"),
 			tr("Enables mipmapping, which some games require to render correctly."));
