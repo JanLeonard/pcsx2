@@ -84,6 +84,8 @@ const char* MainWindow::DEFAULT_THEME_NAME = "darkfusion";
 #endif
 
 MainWindow* g_main_window = nullptr;
+static QString s_unthemed_style_name;
+static bool s_unthemed_style_name_set;
 
 #if defined(_WIN32) || defined(__APPLE__)
 static const bool s_use_central_widget = false;
@@ -122,15 +124,12 @@ MainWindow::~MainWindow()
 
 void MainWindow::initialize()
 {
-	setStyleFromSettings();
-	setIconThemeFromStyle();
 #ifdef __APPLE__
 	CocoaTools::AddThemeChangeHandler(this, [](void* ctx) {
 		// This handler is called *before* the style change has propagated far enough for Qt to see it
 		// Use RunOnUIThread to delay until it has
-		QtHost::RunOnUIThread([ctx = static_cast<MainWindow*>(ctx)] {
-			ctx->setStyleFromSettings(); // Qt won't notice the style change without us touching the palette in some way
-			ctx->setIconThemeFromStyle();
+		QtHost::RunOnUIThread([ctx = static_cast<MainWindow*>(ctx)]{
+			ctx->updateTheme();// Qt won't notice the style change without us touching the palette in some way
 		});
 	});
 #endif
@@ -399,6 +398,18 @@ void MainWindow::recreate()
 	deleteLater();
 }
 
+void MainWindow::updateApplicationTheme()
+{
+	if (!s_unthemed_style_name_set)
+	{
+		s_unthemed_style_name_set = true;
+		s_unthemed_style_name = QApplication::style()->objectName();
+	}
+
+	setStyleFromSettings();
+	setIconThemeFromStyle();
+}
+
 void MainWindow::setStyleFromSettings()
 {
 	const std::string theme(Host::GetBaseStringSettingValue("UI", "Theme", DEFAULT_THEME_NAME));
@@ -622,11 +633,64 @@ void MainWindow::setStyleFromSettings()
 
 		qApp->setStyleSheet("QToolTip { color: #ffffff; background-color: #2a82da; border: 1px solid white; }");
 	}
+	else if (theme == "Ruby")
+	{
+		// Custom pallete by Daisouji, Black as main color andd Red as complimentary.
+		// Alternative dark theme.
+		qApp->setStyle(QStyleFactory::create("Fusion"));
+
+		const QColor gray(128, 128, 128);
+		const QColor slate(18, 18, 18);
+		const QColor rubyish(172, 21, 31);
+
+		QPalette darkPalette;
+		darkPalette.setColor(QPalette::Window, slate);
+		darkPalette.setColor(QPalette::WindowText, Qt::white);
+		darkPalette.setColor(QPalette::Base, slate.lighter());
+		darkPalette.setColor(QPalette::AlternateBase, slate.lighter());
+		darkPalette.setColor(QPalette::ToolTipBase, slate);
+		darkPalette.setColor(QPalette::ToolTipText, Qt::white);
+		darkPalette.setColor(QPalette::Text, Qt::white);
+		darkPalette.setColor(QPalette::Button, slate);
+		darkPalette.setColor(QPalette::ButtonText, Qt::white);
+		darkPalette.setColor(QPalette::Link, Qt::white);
+		darkPalette.setColor(QPalette::Highlight, rubyish);
+		darkPalette.setColor(QPalette::HighlightedText, Qt::white);
+
+		darkPalette.setColor(QPalette::Active, QPalette::Button, slate.lighter());
+		darkPalette.setColor(QPalette::Disabled, QPalette::ButtonText, gray);
+		darkPalette.setColor(QPalette::Disabled, QPalette::WindowText, gray);
+		darkPalette.setColor(QPalette::Disabled, QPalette::Text, gray);
+		darkPalette.setColor(QPalette::Disabled, QPalette::Light, slate.lighter());
+
+		qApp->setPalette(darkPalette);
+
+		qApp->setStyleSheet("QToolTip { color: #ffffff; background-color: #2a82da; border: 1px solid white; }");
+	}
+	else if (theme == "Custom")
+	{
+
+		//Additional Theme option than loads .qss from main PCSX2 Directory
+		qApp->setStyle(QStyleFactory::create("Fusion"));
+
+		QString sheet_content;
+		QFile sheets(QString::fromStdString(Path::Combine(EmuFolders::DataRoot, "custom.qss")));
+
+		if (sheets.open(QFile::ReadOnly))
+		{
+			QString sheet_content = QString::fromUtf8(sheets.readAll().data());
+			qApp->setStyleSheet(sheet_content);
+		}
+		else
+		{
+			qApp->setStyle(QStyleFactory::create("Fusion"));
+		}
+	}
 	else
 	{
 		qApp->setPalette(QApplication::style()->standardPalette());
 		qApp->setStyleSheet(QString());
-		qApp->setStyle(m_unthemed_style_name);
+		qApp->setStyle(s_unthemed_style_name);
 	}
 }
 
@@ -1377,18 +1441,10 @@ void MainWindow::onToolsOpenDataDirectoryTriggered()
 	QtUtils::OpenURL(this, QUrl::fromLocalFile(path));
 }
 
-void MainWindow::onThemeChanged()
+void MainWindow::updateTheme()
 {
-	setStyleFromSettings();
-	setIconThemeFromStyle();
-	recreate();
-}
-
-void MainWindow::onThemeChangedFromSettings()
-{
-	// reopen the settings dialog after recreating
-	onThemeChanged();
-	g_main_window->doSettings();
+	updateApplicationTheme();
+	m_game_list_widget->refreshImages();
 }
 
 void MainWindow::onLoggingOptionChanged()
@@ -1903,6 +1959,7 @@ void MainWindow::destroyDisplayWidget(bool show_game_list)
 			{
 				m_game_list_widget->setVisible(true);
 				setCentralWidget(m_game_list_widget);
+				m_game_list_widget->resizeTableViewColumnsToFit();
 			}
 		}
 		else
@@ -1910,7 +1967,10 @@ void MainWindow::destroyDisplayWidget(bool show_game_list)
 			pxAssertRel(m_ui.mainContainer->indexOf(m_display_widget) == 1, "Display widget in stack");
 			m_ui.mainContainer->removeWidget(m_display_widget);
 			if (show_game_list)
+			{
 				m_ui.mainContainer->setCurrentIndex(0);
+				m_game_list_widget->resizeTableViewColumnsToFit();
+			}
 		}
 	}
 
@@ -1998,7 +2058,7 @@ SettingsDialog* MainWindow::getSettingsDialog()
 	{
 		m_settings_dialog = new SettingsDialog(this);
 		connect(
-			m_settings_dialog->getInterfaceSettingsWidget(), &InterfaceSettingsWidget::themeChanged, this, &MainWindow::onThemeChangedFromSettings);
+			m_settings_dialog->getInterfaceSettingsWidget(), &InterfaceSettingsWidget::themeChanged, this, &MainWindow::updateTheme);
 	}
 
 	return m_settings_dialog;

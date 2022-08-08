@@ -149,6 +149,8 @@ GSState::~GSState()
 
 void GSState::Reset(bool hardware_reset)
 {
+	Flush();
+
 	// FIXME: bios logo not shown cut in half after reset, missing graphics in GoW after first FMV
 	if (hardware_reset)
 		memset(m_mem.m_vm8, 0, m_mem.m_vmsize);
@@ -480,7 +482,7 @@ GSVector2i GSState::GetResolution()
 	// The resolution of the framebuffer is double when in FRAME mode and interlaced.
 	// Also we need a special check because no-interlace patches like to render in the original height, but in non-interlaced mode
 	// which means it would normally go off the bottom of the screen. Advantages of emulation, i guess... Limited to Ignore Offsets + Deinterlacing = Off.
-	if ((isinterlaced() && !m_regs->SMODE2.FFMD) || (GSConfig.InterlaceMode == GSInterlaceMode::Off && !GSConfig.PCRTCOffsets))
+	if ((isinterlaced() && !m_regs->SMODE2.FFMD) || (GSConfig.InterlaceMode == GSInterlaceMode::Off && !GSConfig.PCRTCOffsets && !isinterlaced()))
 		resolution.y *= 2;
 
 	if (ignore_offset)
@@ -507,11 +509,11 @@ GSVector2i GSState::GetResolution()
 	return resolution;
 }
 
-GSVector4i GSState::GetFrameRect(int i)
+GSVector4i GSState::GetFrameRect(int i, bool ignore_off)
 {
 	// If no specific context is requested then pass the merged rectangle as return value
 	if (i == -1)
-		return GetFrameRect(0).runion(GetFrameRect(1));
+		return GetFrameRect(0, ignore_off).runion(GetFrameRect(1, ignore_off));
 
 	GSVector4i rectangle = { 0, 0, 0, 0 };
 
@@ -525,13 +527,19 @@ GSVector4i GSState::GetFrameRect(int i)
 	const GSVector2i magnification(DISP.MAGH+1, DISP.MAGV + 1);
 
 	const u32 DBX = m_regs->DISP[i].DISPFB.DBX;
-	const u32 DBY = m_regs->DISP[i].DISPFB.DBY;
+	int DBY = m_regs->DISP[i].DISPFB.DBY;
+
 
 	int w = DW / magnification.x;
 	int h = DH / magnification.y;
 
-	rectangle.left = DBX;
-	rectangle.top = DBY;
+	// If the combined height overflows 2048, it's likely adding a bit of extra data before the picture for offsetting the interlace
+	// only game known to do this is NASCAR '08
+	if (!ignore_off && (DBY + h) >= 2048)
+		DBY = DBY - 2048;
+
+	rectangle.left = (ignore_off) ? 0 : DBX;
+	rectangle.top = (ignore_off) ? 0 : DBY;
 
 	rectangle.right = rectangle.left + w;
 	rectangle.bottom = rectangle.top + h;
@@ -550,9 +558,8 @@ int GSState::GetFramebufferHeight()
 	// Framebuffer height is 11 bits max
 	constexpr int height_limit = (1 << 11);
 
-	const GSVector4i disp1_rect = GetFrameRect(0);
-	const GSVector4i disp2_rect = GetFrameRect(1);
-
+	const GSVector4i disp1_rect = GetFrameRect(0, true);
+	const GSVector4i disp2_rect = GetFrameRect(1, true);
 	const GSVector4i combined = disp1_rect.runion(disp2_rect);
 
 	// DBY isn't an offset to the frame memory but rather an offset to read output circuit inside
@@ -1954,9 +1961,9 @@ void GSState::Write(const u8* mem, int len)
 			FlushWrite();
 	}
 
-	int page_width = std::max(1, (w / psm.pgs.x));
-	int page_height = std::max(1, (h / psm.pgs.y));
-	int pitch = (std::max(1U, blit.DBW) * 64) / psm.pgs.x;
+	const int page_width = std::max(1, ((w + static_cast<int>(m_env.TRXPOS.DSAX)) / psm.pgs.x));
+	const int page_height = std::max(1, ((h + static_cast<int>(m_env.TRXPOS.DSAY)) / psm.pgs.y));
+	const int pitch = (std::max(1U, blit.DBW) * 64) / psm.pgs.x;
 
 	// Try to avoid flushing draws if it doesn't cross paths
 	m_mem.m_clut.InvalidateRange(blit.DBP, blit.DBP + ((page_width << 5) + ((page_height * pitch) << 5)));
@@ -2203,10 +2210,9 @@ void GSState::Move()
 			(m_mem.*dpsm.wpa)(doff, (m_mem.*spsm.rpa)(soff));
 		});
 	}
-
-	int page_width = std::max(1, (w / dpsm.pgs.x));
-	int page_height = std::max(1, (h / dpsm.pgs.y));
-	int pitch = (std::max(1, dbw) * 64) / dpsm.pgs.x;
+	const int page_width = std::max(1, ((w + static_cast<int>(m_env.TRXPOS.DSAX)) / dpsm.pgs.x));
+	const int page_height = std::max(1, ((h + static_cast<int>(m_env.TRXPOS.DSAY)) / dpsm.pgs.y));
+	const int pitch = (std::max(1, dbw) * 64) / dpsm.pgs.x;
 
 	// Try to avoid flushing draws if it doesn't cross paths
 	m_mem.m_clut.InvalidateRange(dbp, dbp + ((page_width << 5) + ((page_height * pitch) << 5)));
