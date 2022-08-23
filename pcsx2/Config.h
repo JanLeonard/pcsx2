@@ -532,7 +532,7 @@ struct Pcsx2Config
 		CRCHackLevel CRCHack{CRCHackLevel::Automatic};
 		BiFiltering TextureFiltering{BiFiltering::PS2};
 		TexturePreloadingLevel TexturePreloading{TexturePreloadingLevel::Full};
-		GSDumpCompressionMethod GSDumpCompression{GSDumpCompressionMethod::Uncompressed};
+		GSDumpCompressionMethod GSDumpCompression{GSDumpCompressionMethod::LZMA};
 		int Dithering{2};
 		int MaxAnisotropy{0};
 		int SWExtraThreads{2};
@@ -623,6 +623,7 @@ struct Pcsx2Config
 		s32 FinalVolume = 100;
 		s32 Latency{100};
 		s32 SpeakerConfiguration{0};
+		s32 DplDecodingLevel{0};
 
 		double VolumeAdjustC{ 0.0f };
 		double VolumeAdjustFL{ 0.0f };
@@ -649,6 +650,7 @@ struct Pcsx2Config
 				OpEqu(FinalVolume) &&
 				OpEqu(Latency) &&
 				OpEqu(SpeakerConfiguration) &&
+				OpEqu(DplDecodingLevel) &&
 
 				OpEqu(VolumeAdjustC) &&
 				OpEqu(VolumeAdjustFL) &&
