@@ -575,6 +575,16 @@ int GSState::GetFramebufferHeight()
 	return frame_memory_height;
 }
 
+int GSState::GetFramebufferWidth()
+{
+	const GSVector4i disp1_rect = GetFrameRect(0, true);
+	const GSVector4i disp2_rect = GetFrameRect(1, true);
+
+	const int max_width = std::max(disp1_rect.width(), disp2_rect.width());
+
+	return max_width;
+}
+
 bool GSState::IsEnabled(int i)
 {
 	ASSERT(i >= 0 && i < 2);
@@ -1480,9 +1490,8 @@ void GSState::GIFRegHandlerFRAME(const GIFReg* RESTRICT r)
 	GL_REG("FRAME_%d = 0x%x_%x", i, r->U32[1], r->U32[0]);
 
 	GIFRegFRAME NewFrame = r->FRAME;
-	// FBW is clamped between 1 and 32, however this is wrong, FBW of 0 *should* work and does on Dobiestation
-	// However there is some issues so even software mode is incorrect on PCSX2, but this works better..
-	NewFrame.FBW = std::clamp(NewFrame.FBW, 1U, 32U);
+	// FBW is clamped to 32
+	NewFrame.FBW = std::min(NewFrame.FBW, 32U);
 
 	if ((NewFrame.PSM & 0x30) == 0x30)
 		m_env.CTXT[i].ZBUF.PSM &= ~0x30;
@@ -2260,7 +2269,7 @@ void GSState::ReadFIFO(u8* mem, int size)
 	Read(mem, size);
 
 	if (m_dump)
-		m_dump->ReadFIFO(size);
+		m_dump->ReadFIFO(size / 16);
 }
 
 void GSState::ReadLocalMemoryUnsync(u8* mem, int qwc, GIFRegBITBLTBUF BITBLTBUF, GIFRegTRXPOS TRXPOS, GIFRegTRXREG TRXREG)
@@ -2739,7 +2748,8 @@ void GSState::GrowVertexBuffer()
 	const size_t maxcount = std::max<size_t>(m_vertex.maxcount * 3 / 2, 10000);
 
 	GSVertex* vertex = (GSVertex*)_aligned_malloc(sizeof(GSVertex) * maxcount, 32);
-	u32* index = (u32*)_aligned_malloc(sizeof(u32) * maxcount * 3, 32); // worst case is slightly less than vertex number * 3
+	// Worst case index list is a list of points with vs expansion, 6 indices per point
+	u32* index = (u32*)_aligned_malloc(sizeof(u32) * maxcount * 6, 32);
 
 	if (vertex == NULL || index == NULL)
 	{

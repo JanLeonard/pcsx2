@@ -272,7 +272,7 @@ private:
 	struct
 	{
 		GSDepthStencilOGL* dss = nullptr;
-		GSTexture* t = nullptr;
+		GL::Program primid_ps[2];
 	} m_date;
 
 	struct
@@ -323,7 +323,7 @@ public:
 	// Used by OpenGL, so the same calling convention is required.
 	static void APIENTRY DebugOutputToFile(GLenum gl_source, GLenum gl_type, GLuint id, GLenum gl_severity, GLsizei gl_length, const GLchar* gl_message, const void* userParam);
 
-	bool Create(HostDisplay* display) override;
+	bool Create() override;
 
 	void ResetAPIState() override;
 	void RestoreAPIState() override;
@@ -338,8 +338,7 @@ public:
 	void ClearDepth(GSTexture* t) final;
 	void ClearStencil(GSTexture* t, u8 c) final;
 
-	void InitPrimDateTexture(GSTexture* rt, const GSVector4i& area);
-	void RecycleDateTexture();
+	GSTexture* InitPrimDateTexture(GSTexture* rt, const GSVector4i& area, bool datm);
 
 	bool DownloadTexture(GSTexture* src, const GSVector4i& rect, GSTexture::GSMap& out_map) final;
 
@@ -391,6 +390,4 @@ public:
 	void SetupOM(OMDepthStencilSelector dssel);
 	GLuint GetSamplerID(PSSamplerSelector ssel);
 	GLuint GetPaletteSamplerID();
-
-	void Barrier(GLbitfield b);
 };

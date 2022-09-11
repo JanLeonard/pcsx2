@@ -85,6 +85,7 @@ public:
 	void initialize();
 	void connectVMThreadSignals(EmuThread* thread);
 	void startupUpdateCheck();
+	void resetSettings(bool ui);
 
 	/// Locks the VM by pausing it, while a popup dialog is displayed.
 	VMLock pauseAndLockVM();
@@ -102,8 +103,9 @@ public Q_SLOTS:
 	void cancelGameListRefresh();
 	void invalidateSaveStateCache();
 	void reportError(const QString& title, const QString& message);
+	bool confirmMessage(const QString& title, const QString& message);
 	void runOnUIThread(const std::function<void()>& func);
-	bool requestShutdown(bool allow_confirm = true, bool allow_save_to_state = true, bool block_until_done = false);
+	bool requestShutdown(bool allow_confirm = true, bool allow_save_to_state = true, bool default_save_to_state = true, bool block_until_done = false);
 	void requestExit();
 	void checkForSettingChanges();
 
@@ -166,8 +168,6 @@ private Q_SLOTS:
 
 	void onGameChanged(const QString& path, const QString& serial, const QString& name, quint32 crc);
 
-	void recreate();
-
 protected:
 	void showEvent(QShowEvent* event) override;
 	void closeEvent(QCloseEvent* event) override;
@@ -185,6 +185,8 @@ private:
 
 	void setupAdditionalUi();
 	void connectSignals();
+	void recreate();
+	void recreateSettings();
 
 	void saveStateToConfig();
 	void restoreStateFromConfig();
@@ -257,6 +259,7 @@ private:
 	QString m_current_game_name;
 	quint32 m_current_game_crc;
 
+	bool m_display_created = false;
 	bool m_save_states_invalidated = false;
 	bool m_was_paused_on_surface_loss = false;
 	bool m_was_disc_change_request = false;

@@ -246,6 +246,13 @@ struct alignas(16) GSHWDrawConfig
 		Triangle,
 		Sprite,
 	};
+	enum class VSExpand: u8
+	{
+		None,
+		Point,
+		Line,
+		Sprite,
+	};
 #pragma pack(push, 1)
 	struct GSSelector
 	{
@@ -256,6 +263,7 @@ struct alignas(16) GSHWDrawConfig
 				GSTopology topology : 2;
 				bool expand : 1;
 				bool iip : 1;
+				bool forward_primid : 1;
 			};
 			u8 key;
 		};
@@ -272,7 +280,8 @@ struct alignas(16) GSHWDrawConfig
 				u8 tme : 1;
 				u8 iip : 1;
 				u8 point_size : 1;		///< Set when points need to be expanded without geometry shader.
-				u8 _free : 1;
+				VSExpand expand : 2;
+				u8 _free : 2;
 			};
 			u8 key;
 		};
@@ -304,7 +313,7 @@ struct alignas(16) GSHWDrawConfig
 				// Flat/goround shading
 				u32 iip : 1;
 				// Pixel test
-				u32 date : 4;
+				u32 date : 3;
 				u32 atst : 3;
 				// Color sampling
 				u32 fst : 1; // Investigate to do it on the VS
@@ -690,7 +699,8 @@ public:
 	{
 		bool broken_point_sampler : 1; ///< Issue with AMD cards, see tfx shader for details
 		bool geometry_shader      : 1; ///< Supports geometry shader
-		bool image_load_store     : 1; ///< Supports atomic min and max on images (for use with prim tracking destination alpha algorithm)
+		bool vs_expand            : 1; ///< Supports expanding points/lines/sprites in the vertex shader
+		bool primitive_id         : 1; ///< Supports primitive ID for use with prim tracking destination alpha algorithm
 		bool texture_barrier      : 1; ///< Supports sampling rt and hopefully texture barrier
 		bool provoking_vertex_last: 1; ///< Supports using the last vertex in a primitive as the value for flat shading.
 		bool point_expand         : 1; ///< Supports point expansion in hardware without using geometry shaders.
@@ -730,8 +740,6 @@ private:
 protected:
 	static constexpr u32 MAX_POOLED_TEXTURES = 300;
 
-	HostDisplay* m_display = nullptr;
-
 	GSTexture* m_merge = nullptr;
 	GSTexture* m_weavebob = nullptr;
 	GSTexture* m_blend = nullptr;
@@ -762,7 +770,6 @@ public:
 	GSDevice();
 	virtual ~GSDevice();
 
-	__fi HostDisplay* GetDisplay() const { return m_display; }
 	__fi unsigned int GetFrameNumber() const { return m_frame; }
 
 	void Recycle(GSTexture* t);
@@ -783,7 +790,7 @@ public:
 		Performance
 	};
 
-	virtual bool Create(HostDisplay* display);
+	virtual bool Create();
 	virtual void Destroy();
 
 	virtual void ResetAPIState();

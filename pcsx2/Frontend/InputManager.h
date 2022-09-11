@@ -16,6 +16,7 @@
 #pragma once
 
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string_view>
 #include <variant>
@@ -204,6 +205,9 @@ namespace InputManager
 
 	/// Converts an input class to a string.
 	const char* InputSourceToString(InputSourceType clazz);
+
+	/// Returns the default state for an input source.
+	bool GetInputSourceDefaultEnabled(InputSourceType type);
 
 	/// Parses an input class string.
 	std::optional<InputSourceType> ParseInputSourceString(const std::string_view& str);

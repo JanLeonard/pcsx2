@@ -239,10 +239,11 @@ GSTexture* GSRendererHW::GetOutput(int i, int& y_offset)
 
 	const int videomode = static_cast<int>(GetVideoMode()) - 1;
 	const GSVector4i offsets = !GSConfig.PCRTCOverscan ? VideoModeOffsets[videomode] : VideoModeOffsetsOverscan[videomode];
+
+	const int fb_width = std::min<int>(std::min<int>(GetFramebufferWidth(), DISPFB.FBW * 64) + (int)DISPFB.DBX, 2048);
 	const int display_height = offsets.y * ((isinterlaced() && !m_regs->SMODE2.FFMD) ? 2 : 1);
 	const int display_offset = GetResolutionOffset(i).y;
 	int fb_height = std::min<int>(std::min<int>(GetFramebufferHeight(), display_height) + (int)DISPFB.DBY, 2048);
-	
 	// If there is a negative vertical offset on the picture, we need to read more.
 	if (display_offset < 0)
 	{
@@ -252,7 +253,7 @@ GSTexture* GSRendererHW::GetOutput(int i, int& y_offset)
 
 	GSTexture* t = nullptr;
 
-	if (GSTextureCache::Target* rt = m_tc->LookupDisplayTarget(TEX0, GetOutputSize(fb_height), fb_height))
+	if (GSTextureCache::Target* rt = m_tc->LookupDisplayTarget(TEX0, GetOutputSize(fb_height), fb_width, fb_height))
 	{
 		t = rt->m_texture;
 
@@ -288,7 +289,12 @@ GSTexture* GSRendererHW::GetFeedbackOutput()
 	TEX0.PSM = m_regs->DISP[m_regs->EXTBUF.FBIN & 1].DISPFB.PSM;
 
 	const int fb_height = /*GetFrameRect(i).bottom*/ m_regs->DISP[m_regs->EXTBUF.FBIN & 1].DISPLAY.DH;
-	GSTextureCache::Target* rt = m_tc->LookupDisplayTarget(TEX0, GetOutputSize(fb_height), fb_height);
+	GSVector2i size = GetOutputSize(fb_height);
+
+	if (m_regs->DISP[m_regs->EXTBUF.FBIN & 1].DISPFB.DBX)
+		size.x += m_regs->DISP[m_regs->EXTBUF.FBIN & 1].DISPFB.DBX * static_cast<int>(GSConfig.UpscaleMultiplier);
+
+	GSTextureCache::Target* rt = m_tc->LookupDisplayTarget(TEX0, GetOutputSize(fb_height), fb_height, size.x);
 
 	GSTexture* t = rt->m_texture;
 
@@ -379,6 +385,68 @@ void GSRendererHW::Lines2Sprites()
 
 		m_vertex.head = m_vertex.tail = m_vertex.next = count * 2;
 		m_index.tail = count * 3;
+	}
+}
+
+template <GSHWDrawConfig::VSExpand Expand>
+void GSRendererHW::ExpandIndices()
+{
+	size_t process_count = (m_index.tail + 3) / 4 * 4;
+	if (Expand == GSHWDrawConfig::VSExpand::Point)
+	{
+		// Make sure we have space for writing off the end slightly
+		while (process_count > m_vertex.maxcount)
+			GrowVertexBuffer();
+	}
+
+	u32 expansion_factor = Expand == GSHWDrawConfig::VSExpand::Point ? 6 : 3;
+	m_index.tail *= expansion_factor;
+	GSVector4i* end = reinterpret_cast<GSVector4i*>(m_index.buff);
+	GSVector4i* read = reinterpret_cast<GSVector4i*>(m_index.buff + process_count);
+	GSVector4i* write = reinterpret_cast<GSVector4i*>(m_index.buff + process_count * expansion_factor);
+	while (read > end)
+	{
+		read -= 1;
+		write -= expansion_factor;
+		switch (Expand)
+		{
+			case GSHWDrawConfig::VSExpand::None:
+				break;
+			case GSHWDrawConfig::VSExpand::Point:
+			{
+				constexpr GSVector4i low0 = GSVector4i::cxpr(0, 1, 2, 1);
+				constexpr GSVector4i low1 = GSVector4i::cxpr(2, 3, 0, 1);
+				constexpr GSVector4i low2 = GSVector4i::cxpr(2, 1, 2, 3);
+				GSVector4i in = read->sll32(2);
+				write[0] = in.xxxx() | low0;
+				write[1] = in.xxyy() | low1;
+				write[2] = in.yyyy() | low2;
+				write[3] = in.zzzz() | low0;
+				write[4] = in.zzww() | low1;
+				write[5] = in.wwww() | low2;
+				break;
+			}
+			case GSHWDrawConfig::VSExpand::Line:
+			{
+				constexpr GSVector4i low0 = GSVector4i::cxpr(0, 1, 2, 1);
+				constexpr GSVector4i low1 = GSVector4i::cxpr(2, 3, 0, 1);
+				constexpr GSVector4i low2 = GSVector4i::cxpr(2, 1, 2, 3);
+				GSVector4i in = read->sll32(2);
+				write[0] = in.xxyx() | low0;
+				write[1] = in.yyzz() | low1;
+				write[2] = in.wzww() | low2;
+				break;
+			}
+			case GSHWDrawConfig::VSExpand::Sprite:
+			{
+				constexpr GSVector4i low = GSVector4i::cxpr(0, 1, 0, 1);
+				GSVector4i in = read->sll32(1);
+				write[0] = in.xxyx() | low;
+				write[1] = in.yyzz() | low;
+				write[2] = in.wzww() | low;
+				break;
+			}
+		}
 	}
 }
 
@@ -1216,12 +1284,6 @@ void GSRendererHW::Draw()
 	GSDrawingContext* context = m_context;
 	const GSLocalMemory::psm_t& tex_psm = GSLocalMemory::m_psm[m_context->TEX0.PSM];
 
-	if (!context->FRAME.FBW)
-	{
-		GL_CACHE("Skipping draw with FRAME.FBW = 0.");
-		return;
-	}
-
 	// When the format is 24bit (Z or C), DATE ceases to function.
 	// It was believed that in 24bit mode all pixels pass because alpha doesn't exist
 	// however after testing this on a PS2 it turns out nothing passes, it ignores the draw.
@@ -1837,6 +1899,55 @@ void GSRendererHW::Draw()
 #endif
 }
 
+/// Verifies assumptions we expect to hold about indices
+bool GSRendererHW::VerifyIndices()
+{
+	switch (m_vt.m_primclass)
+	{
+		case GS_SPRITE_CLASS:
+			if (m_index.tail % 2 != 0)
+				return false;
+			[[fallthrough]];
+		case GS_POINT_CLASS:
+			// Expect indices to be flat increasing
+			for (size_t i = 0; i < m_index.tail; i++)
+			{
+				if (m_index.buff[i] != i)
+					return false;
+			}
+			break;
+		case GS_LINE_CLASS:
+			if (m_index.tail % 2 != 0)
+				return false;
+			// Expect each line to be a pair next to each other
+			// VS expand relies on this!
+			if (g_gs_device->Features().provoking_vertex_last)
+			{
+				for (size_t i = 0; i < m_index.tail; i += 2)
+				{
+					if (m_index.buff[i] + 1 != m_index.buff[i + 1])
+						return false;
+				}
+			}
+			else
+			{
+				for (size_t i = 0; i < m_index.tail; i += 2)
+				{
+					if (m_index.buff[i] != m_index.buff[i + 1] + 1)
+						return false;
+				}
+			}
+			break;
+		case GS_TRIANGLE_CLASS:
+			if (m_index.tail % 3 != 0)
+				return false;
+			break;
+		case GS_INVALID_CLASS:
+			break;
+	}
+	return true;
+}
+
 void GSRendererHW::SetupIA(const float& sx, const float& sy)
 {
 	GL_PUSH("IA");
@@ -1849,9 +1960,14 @@ void GSRendererHW::SetupIA(const float& sx, const float& sy)
 	const bool unscale_pt_ln = !GSConfig.UserHacks_DisableSafeFeatures && (GetUpscaleMultiplier() != 1);
 	const GSDevice::FeatureSupport features = g_gs_device->Features();
 
+	ASSERT(VerifyIndices());
+
 	switch (m_vt.m_primclass)
 	{
 		case GS_POINT_CLASS:
+			m_conf.gs.topology = GSHWDrawConfig::GSTopology::Point;
+			m_conf.topology = GSHWDrawConfig::Topology::Point;
+			m_conf.indices_per_prim = 1;
 			if (unscale_pt_ln)
 			{
 				if (features.point_expand)
@@ -1863,14 +1979,21 @@ void GSRendererHW::SetupIA(const float& sx, const float& sy)
 					m_conf.gs.expand = true;
 					m_conf.cb_vs.point_size = GSVector2(16.0f * sx, 16.0f * sy);
 				}
+				else if (features.vs_expand)
+				{
+					m_conf.vs.expand = GSHWDrawConfig::VSExpand::Point;
+					m_conf.cb_vs.point_size = GSVector2(16.0f * sx, 16.0f * sy);
+					m_conf.topology = GSHWDrawConfig::Topology::Triangle;
+					m_conf.indices_per_prim = 6;
+					ExpandIndices<GSHWDrawConfig::VSExpand::Point>();
+				}
 			}
-
-			m_conf.gs.topology = GSHWDrawConfig::GSTopology::Point;
-			m_conf.topology = GSHWDrawConfig::Topology::Point;
-			m_conf.indices_per_prim = 1;
 			break;
 
 		case GS_LINE_CLASS:
+			m_conf.gs.topology = GSHWDrawConfig::GSTopology::Line;
+			m_conf.topology = GSHWDrawConfig::Topology::Line;
+			m_conf.indices_per_prim = 2;
 			if (unscale_pt_ln)
 			{
 				if (features.line_expand)
@@ -1882,11 +2005,15 @@ void GSRendererHW::SetupIA(const float& sx, const float& sy)
 					m_conf.gs.expand = true;
 					m_conf.cb_vs.point_size = GSVector2(16.0f * sx, 16.0f * sy);
 				}
+				else if (features.vs_expand)
+				{
+					m_conf.vs.expand = GSHWDrawConfig::VSExpand::Line;
+					m_conf.cb_vs.point_size = GSVector2(16.0f * sx, 16.0f * sy);
+					m_conf.topology = GSHWDrawConfig::Topology::Triangle;
+					m_conf.indices_per_prim = 6;
+					ExpandIndices<GSHWDrawConfig::VSExpand::Line>();
+				}
 			}
-
-			m_conf.gs.topology = GSHWDrawConfig::GSTopology::Line;
-			m_conf.topology = GSHWDrawConfig::Topology::Line;
-			m_conf.indices_per_prim = 2;
 			break;
 
 		case GS_SPRITE_CLASS:
@@ -1914,6 +2041,13 @@ void GSRendererHW::SetupIA(const float& sx, const float& sy)
 
 				m_conf.topology = GSHWDrawConfig::Topology::Line;
 				m_conf.indices_per_prim = 2;
+			}
+			else if (features.vs_expand && !m_vt.m_accurate_stq)
+			{
+				m_conf.topology = GSHWDrawConfig::Topology::Triangle;
+				m_conf.vs.expand = GSHWDrawConfig::VSExpand::Sprite;
+				m_conf.indices_per_prim = 6;
+				ExpandIndices<GSHWDrawConfig::VSExpand::Sprite>();
 			}
 			else
 			{
@@ -2341,6 +2475,8 @@ void GSRendererHW::EmulateBlending(bool& DATE_PRIMID, bool& DATE_BARRIER, bool& 
 	// Compute the blending equation to detect special case
 	const GSDevice::FeatureSupport features(g_gs_device->Features());
 	const GIFRegALPHA& ALPHA = m_context->ALPHA;
+	// AFIX: Afix factor.
+	u8 AFIX = ALPHA.FIX;
 
 	// Set blending to shader bits
 	m_conf.ps.blend_a = ALPHA.A;
@@ -2355,18 +2491,25 @@ void GSRendererHW::EmulateBlending(bool& DATE_PRIMID, bool& DATE_BARRIER, bool& 
 		m_conf.ps.fixed_one_a = 1;
 		m_conf.ps.blend_c = 0;
 	}
+	// 24 bits doesn't have an alpha channel so use 128 (1.0f) fix factor as equivalent.
+	else if (m_conf.ps.dfmt == 1 && m_conf.ps.blend_c == 1)
+	{
+		AFIX = 128;
+		m_conf.ps.blend_c = 2;
+	}
 
 	// Get alpha value
 	const bool alpha_c0_zero = (m_conf.ps.blend_c == 0 && GetAlphaMinMax().max == 0) && !IsCoverageAlpha();
 	const bool alpha_c0_one = (m_conf.ps.blend_c == 0 && (GetAlphaMinMax().min == 128) && (GetAlphaMinMax().max == 128)) || IsCoverageAlpha();
 	const bool alpha_c0_high_min_one = (m_conf.ps.blend_c == 0 && GetAlphaMinMax().min > 128) && !IsCoverageAlpha();
 	const bool alpha_c0_high_max_one = (m_conf.ps.blend_c == 0 && GetAlphaMinMax().max > 128) && !IsCoverageAlpha();
-	const bool alpha_c2_zero = (m_conf.ps.blend_c == 2 && ALPHA.FIX == 0u);
-	const bool alpha_c2_one = (m_conf.ps.blend_c == 2 && ALPHA.FIX == 128u);
-	const bool alpha_c2_high_one = (m_conf.ps.blend_c == 2 && ALPHA.FIX > 128u);
+	const bool alpha_c2_zero = (m_conf.ps.blend_c == 2 && AFIX == 0u);
+	const bool alpha_c2_one = (m_conf.ps.blend_c == 2 && AFIX == 128u);
+	const bool alpha_c2_high_one = (m_conf.ps.blend_c == 2 && AFIX > 128u);
+	const bool alpha_one = alpha_c0_one || alpha_c2_one;
 
 	// Optimize blending equations, must be done before index calculation
-	if ((m_conf.ps.blend_a == m_conf.ps.blend_b) || ((m_conf.ps.blend_b == m_conf.ps.blend_d) && (alpha_c0_one || alpha_c2_one)))
+	if ((m_conf.ps.blend_a == m_conf.ps.blend_b) || ((m_conf.ps.blend_b == m_conf.ps.blend_d) && alpha_one))
 	{
 		// Condition 1:
 		// A == B
@@ -2406,7 +2549,8 @@ void GSRendererHW::EmulateBlending(bool& DATE_PRIMID, bool& DATE_BARRIER, bool& 
 		blend_ad_alpha_masked = false;
 
 	u8 blend_index = u8(((m_conf.ps.blend_a * 3 + m_conf.ps.blend_b) * 3 + m_conf.ps.blend_c) * 3 + m_conf.ps.blend_d);
-	const int blend_flag = GSDevice::GetBlendFlags(blend_index);
+	const HWBlend blend_preliminary = GSDevice::GetBlend(blend_index, false);
+	const int blend_flag = blend_preliminary.flags;
 
 	// Re set alpha, it was modified, must be done after index calculation
 	if (blend_ad_alpha_masked)
@@ -2417,6 +2561,11 @@ void GSRendererHW::EmulateBlending(bool& DATE_PRIMID, bool& DATE_BARRIER, bool& 
 
 	// Do the multiplication in shader for blending accumulation: Cs*As + Cd or Cs*Af + Cd
 	bool accumulation_blend = !!(blend_flag & BLEND_ACCU);
+	// If alpha == 1.0, almost everything is an accumulation blend!
+	// Ones that use (1 + Alpha) can't guarante the mixed sw+hw blending this enables will give an identical result to sw due to clamping
+	// But enable for everything else that involves dst color
+	if (alpha_one && (m_conf.ps.blend_a != m_conf.ps.blend_d) && blend_preliminary.dst != GSDevice::CONST_ZERO)
+		accumulation_blend = true;
 
 	// Blending doesn't require barrier, or sampling of the rt
 	const bool blend_non_recursive = !!(blend_flag & BLEND_NO_REC);
@@ -2685,13 +2834,30 @@ void GSRendererHW::EmulateBlending(bool& DATE_PRIMID, bool& DATE_BARRIER, bool& 
 	{
 		// Require the fix alpha vlaue
 		if (m_conf.ps.blend_c == 2)
-			m_conf.cb_ps.TA_MaxDepth_Af.a = static_cast<float>(ALPHA.FIX) / 128.0f;
+			m_conf.cb_ps.TA_MaxDepth_Af.a = static_cast<float>(AFIX) / 128.0f;
 
 		const HWBlend blend = GSDevice::GetBlend(blend_index, replace_dual_src);
 		if (accumulation_blend)
 		{
 			// Keep HW blending to do the addition/subtraction
 			m_conf.blend = {true, GSDevice::CONST_ONE, GSDevice::CONST_ONE, blend.op, false, 0};
+			// Remove Cd from sw blend, it's handled in hw
+			if (m_conf.ps.blend_a == 1)
+				m_conf.ps.blend_a = 2;
+			if (m_conf.ps.blend_b == 1)
+				m_conf.ps.blend_b = 2;
+			if (m_conf.ps.blend_d == 1)
+				m_conf.ps.blend_d = 2;
+
+			if (m_conf.ps.blend_a == 2)
+			{
+				// Accumulation blend is only available in (Cs - 0)*Something + Cd, or with alpha == 1
+				ASSERT(m_conf.ps.blend_d == 2 || alpha_one);
+				// A bit of normalization
+				m_conf.ps.blend_a = m_conf.ps.blend_d;
+				m_conf.ps.blend_d = 2;
+			}
+
 			if (m_conf.ps.blend_a == 2)
 			{
 				// The blend unit does a reverse subtraction so it means
@@ -2700,8 +2866,6 @@ void GSRendererHW::EmulateBlending(bool& DATE_PRIMID, bool& DATE_BARRIER, bool& 
 				m_conf.ps.blend_a = m_conf.ps.blend_b;
 				m_conf.ps.blend_b = 2;
 			}
-			// Remove the addition/substraction from the SW blending
-			m_conf.ps.blend_d = 2;
 
 			// Dual source output not needed (accumulation blend replaces it with ONE).
 			m_conf.ps.no_color1 = true;
@@ -2712,7 +2876,7 @@ void GSRendererHW::EmulateBlending(bool& DATE_PRIMID, bool& DATE_BARRIER, bool& 
 		else if (blend_mix)
 		{
 			// For mixed blend, the source blend is done in the shader (so we use CONST_ONE as a factor).
-			m_conf.blend = {true, GSDevice::CONST_ONE, blend.dst, blend.op, m_conf.ps.blend_c == 2, ALPHA.FIX};
+			m_conf.blend = {true, GSDevice::CONST_ONE, blend.dst, blend.op, m_conf.ps.blend_c == 2, AFIX};
 			m_conf.ps.blend_mix = (blend.op == GSDevice::OP_REV_SUBTRACT) ? 2 : 1;
 			
 			// Elide DSB colour output if not used by dest.
@@ -2808,7 +2972,7 @@ void GSRendererHW::EmulateBlending(bool& DATE_PRIMID, bool& DATE_BARRIER, bool& 
 			else if (m_conf.ps.blend_c == 2)
 			{
 				m_conf.ps.blend_c = 2;
-				m_conf.cb_ps.TA_MaxDepth_Af.a = static_cast<float>(ALPHA.FIX) / 128.0f;
+				m_conf.cb_ps.TA_MaxDepth_Af.a = static_cast<float>(AFIX) / 128.0f;
 				m_conf.ps.clr_hw = 2;
 			}
 			else // m_conf.ps.blend_c == 0
@@ -2827,18 +2991,8 @@ void GSRendererHW::EmulateBlending(bool& DATE_PRIMID, bool& DATE_BARRIER, bool& 
 			m_conf.ps.clr_hw = 6;
 			m_conf.require_one_barrier |= true;
 		}
-
-		if (m_conf.ps.dfmt == 1 && m_conf.ps.blend_c == 1)
-		{
-			// 24 bits doesn't have an alpha channel so use 1.0f fix factor as equivalent
-			const HWBlend blend(GSDevice::GetBlend(blend_index + 3, replace_dual_src)); // +3 <=> +1 on C
-			m_conf.blend = {true, blend.src, blend.dst, blend.op, true, 128};
-		}
-		else
-		{
-			const HWBlend blend(GSDevice::GetBlend(blend_index, replace_dual_src));
-			m_conf.blend = {true, blend.src, blend.dst, blend.op, m_conf.ps.blend_c == 2, ALPHA.FIX};
-		}
+		const HWBlend blend(GSDevice::GetBlend(blend_index, replace_dual_src));
+		m_conf.blend = {true, blend.src, blend.dst, blend.op, m_conf.ps.blend_c == 2, AFIX};
 
 		// Remove second color output when unused. Works around bugs in some drivers (e.g. Intel).
 		m_conf.ps.no_color1 |= !GSDevice::IsDualSourceBlendFactor(m_conf.blend.src_factor) &&
@@ -3298,34 +3452,30 @@ void GSRendererHW::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Sourc
 				GL_PERF("DATE: Fast with alpha %d-%d", GetAlphaMinMax().min, GetAlphaMinMax().max);
 				DATE_one = true;
 			}
-			else if ((m_vt.m_primclass == GS_SPRITE_CLASS && m_drawlist.size() < 50) || (m_index.tail < 100))
+			else if (features.texture_barrier && ((m_vt.m_primclass == GS_SPRITE_CLASS && m_drawlist.size() < 50) || (m_index.tail < 100)))
 			{
 				// texture barrier will split the draw call into n draw call. It is very efficient for
 				// few primitive draws. Otherwise it sucks.
 				GL_PERF("DATE: Accurate with alpha %d-%d", GetAlphaMinMax().min, GetAlphaMinMax().max);
-				if (features.texture_barrier)
-				{
-					m_conf.require_full_barrier = true;
-					DATE_BARRIER = true;
-				}
+				m_conf.require_full_barrier = true;
+				DATE_BARRIER = true;
 			}
-			else if (GSConfig.AccurateDATE)
+			else if (features.primitive_id)
 			{
-				// Note: Fast level (DATE_one) was removed as it's less accurate.
 				GL_PERF("DATE: Accurate with alpha %d-%d", GetAlphaMinMax().min, GetAlphaMinMax().max);
-				if (features.image_load_store)
-				{
-					DATE_PRIMID = true;
-				}
-				else if (features.texture_barrier)
-				{
-					m_conf.require_full_barrier = true;
-					DATE_BARRIER = true;
-				}
-				else if (features.stencil_buffer)
-				{
-					DATE_one = true;
-				}
+				DATE_PRIMID = true;
+			}
+			else if (features.texture_barrier)
+			{
+				GL_PERF("DATE: Accurate with alpha %d-%d", GetAlphaMinMax().min, GetAlphaMinMax().max);
+				m_conf.require_full_barrier = true;
+				DATE_BARRIER = true;
+			}
+			else if (features.stencil_buffer)
+			{
+				// Might be inaccurate in some cases but we shouldn't hit this path.
+				GL_PERF("DATE: Fast with alpha %d-%d", GetAlphaMinMax().min, GetAlphaMinMax().max);
+				DATE_one = true;
 			}
 		}
 		else if (!m_conf.colormask.wa && !m_context->TEST.ATE)
@@ -3438,12 +3588,14 @@ void GSRendererHW::DrawPrims(GSTexture* rt, GSTexture* ds, GSTextureCache::Sourc
 		m_conf.depth.date = 1;
 		m_conf.depth.date_one = 1;
 	}
+	else if (DATE_PRIMID)
+	{
+		m_conf.ps.date = 1 + m_context->TEST.DATM;
+		m_conf.gs.forward_primid = 1;
+	}
 	else if (DATE)
 	{
-		if (DATE_PRIMID)
-			m_conf.ps.date = 1 + m_context->TEST.DATM;
-		else
-			m_conf.depth.date = 1;
+		m_conf.depth.date = 1;
 	}
 
 	m_conf.ps.fba = m_context->FBA.FBA;
@@ -3765,8 +3917,6 @@ bool GSRendererHW::SwPrimRender()
 		if (bbox.y == bbox.w)
 			bbox.w++;
 	}
-
-	scissor.z = std::min<int>(scissor.z, (int)context->FRAME.FBW * 64); // TODO: find a game that overflows and check which one is the right behaviour
 
 	data.scissor = scissor;
 	data.bbox = bbox;

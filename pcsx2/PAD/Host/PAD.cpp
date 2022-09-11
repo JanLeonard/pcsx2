@@ -290,17 +290,22 @@ const char* PAD::GetDefaultPadType(u32 pad)
 	return (pad == 0) ? "DualShock2" : "None";
 }
 
-void PAD::SetDefaultConfig(SettingsInterface& si)
+void PAD::SetDefaultControllerConfig(SettingsInterface& si)
 {
 	si.ClearSection("InputSources");
 	si.ClearSection("Hotkeys");
 	si.ClearSection("Pad");
 
 	// PCSX2 Controller Settings - Global Settings
-	si.SetBoolValue("InputSources", "SDL", true);
+	for (u32 i = 0; i < static_cast<u32>(InputSourceType::Count); i++)
+	{
+		si.SetBoolValue("InputSources",
+			InputManager::InputSourceToString(static_cast<InputSourceType>(i)),
+			InputManager::GetInputSourceDefaultEnabled(static_cast<InputSourceType>(i)));
+	}
+#ifdef SDL_BUILD
 	si.SetBoolValue("InputSources", "SDLControllerEnhancedMode", false);
-	si.SetBoolValue("InputSources", "XInput", false);
-	si.SetBoolValue("InputSources", "RawInput", false);
+#endif
 	si.SetBoolValue("Pad", "MultitapPort1", false);
 	si.SetBoolValue("Pad", "MultitapPort2", false);
 	si.SetFloatValue("Pad", "PointerXScale", 8.0f);
@@ -324,7 +329,10 @@ void PAD::SetDefaultConfig(SettingsInterface& si)
 	// PCSX2 Controller Settings - Controller 1 / Controller 2 / ...
 	// Use the automapper to set this up.
 	MapController(si, 0, InputManager::GetGenericBindingMapping("Keyboard"));
+}
 
+void PAD::SetDefaultHotkeyConfig(SettingsInterface& si)
+{
 	// PCSX2 Controller Settings - Hotkeys
 
 	// PCSX2 Controller Settings - Hotkeys - General
@@ -361,7 +369,8 @@ void PAD::SetDefaultConfig(SettingsInterface& si)
 	//  si.SetStringValue("Hotkeys", "FrameAdvance", "Keyboard"); TBD
 	//	si.SetStringValue("Hotkeys", "IncreaseSpeed", "Keyboard"); TBD
 	//  si.SetStringValue("Hotkeys", "ResetVM", "Keyboard"); TBD
-	si.SetStringValue("Hotkeys", "ShutdownVM", "Keyboard/Escape");
+	//  si.SetStringValue("Hotkeys", "ShutdownVM", "Keyboard"); TBD
+	si.SetStringValue("Hotkeys", "OpenPauseMenu", "Keyboard/Escape");
 	si.SetStringValue("Hotkeys", "ToggleFrameLimit", "Keyboard/F4");
 	si.SetStringValue("Hotkeys", "TogglePause", "Keyboard/Space");
 	si.SetStringValue("Hotkeys", "ToggleSlowMotion", "Keyboard/Shift & Keyboard/Backtab");
@@ -409,17 +418,23 @@ static const PAD::ControllerBindingInfo s_dualshock2_binds[] = {
 static const PAD::ControllerSettingInfo s_dualshock2_settings[] = {
 	{PAD::ControllerSettingInfo::Type::Float, "Deadzone", "Analog Deadzone",
 		"Sets the analog stick deadzone, i.e. the fraction of the stick movement which will be ignored.",
-		"0.00", "0.00", "1.00", "0.01"},
+		"0.00", "0.00", "1.00", "0.01", "%.0f%%", 100.0f},
 	{PAD::ControllerSettingInfo::Type::Float, "AxisScale", "Analog Sensitivity",
 		"Sets the analog stick axis scaling factor. A value between 1.30 and 1.40 is recommended when using recent "
 		"controllers, e.g. DualShock 4, Xbox One Controller.",
-		"1.33", "0.01", "2.00", "0.01"},
+		"1.33", "0.01", "2.00", "0.01", "%.0f%%", 100.0f},
 	{PAD::ControllerSettingInfo::Type::Float, "LargeMotorScale", "Large Motor Vibration Scale",
 		"Increases or decreases the intensity of low frequency vibration sent by the game.",
-		"1.00", "0.00", "2.00", "0.01"},
+		"1.00", "0.00", "2.00", "0.01", "%.0f%%", 100.0f},
 	{PAD::ControllerSettingInfo::Type::Float, "SmallMotorScale", "Small Motor Vibration Scale",
 		"Increases or decreases the intensity of high frequency vibration sent by the game.",
-		"1.00", "0.00", "2.00", "0.01"},
+		"1.00", "0.00", "2.00", "0.01", "%.0f%%", 100.0f},
+	/*{PAD::ControllerSettingInfo::Type::Float, "InitialPressure", "Initial Pressure",
+	"Sets the pressure when the modifier button isn't held.",
+	"1.00", "0.01", "1.00", "0.01", "%.0f%%", 100.0f},*/
+	{PAD::ControllerSettingInfo::Type::Float, "PressureModifier", "Modifier Pressure",
+		"Sets the pressure when the modifier button is held.",
+		"0.50", "0.01", "1.00", "0.01", "%.0f%%", 100.0f},
 };
 
 static const PAD::ControllerInfo s_controller_info[] = {
@@ -504,6 +519,20 @@ void PAD::CopyConfiguration(SettingsInterface* dest_si, const SettingsInterface&
 	{
 		dest_si->CopyBoolValue(src_si, "Pad", "MultitapPort1");
 		dest_si->CopyBoolValue(src_si, "Pad", "MultitapPort2");
+		dest_si->CopyBoolValue(src_si, "Pad", "MultitapPort1");
+		dest_si->CopyBoolValue(src_si, "Pad", "MultitapPort2");
+		dest_si->CopyFloatValue(src_si, "Pad", "PointerXScale");
+		dest_si->CopyFloatValue(src_si, "Pad", "PointerYScale");
+		dest_si->CopyBoolValue(src_si, "Pad", "PointerXInvert");
+		dest_si->CopyBoolValue(src_si, "Pad", "PointerYInvert");
+		for (u32 i = 0; i < static_cast<u32>(InputSourceType::Count); i++)
+		{
+			dest_si->CopyBoolValue(src_si, "InputSources",
+				InputManager::InputSourceToString(static_cast<InputSourceType>(i)));
+		}
+#ifdef SDL_BUILD
+		dest_si->CopyBoolValue(src_si, "InputSources", "SDLControllerEnhancedMode");
+#endif
 	}
 
 	for (u32 port = 0; port < NUM_CONTROLLER_PORTS; port++)

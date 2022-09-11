@@ -466,8 +466,6 @@ set(pcsx2USBSources
 	USB/usb-mic/usb-mic-singstar.cpp
 	USB/usb-mic/usb-mic-logitech.cpp
 	USB/usb-mic/usb-headset.cpp
-	../3rdparty/jpgd/jpgd.cpp
-	../3rdparty/jpgd/jpge.cpp
 	USB/usb-eyetoy/jo_mpeg.cpp
 	USB/usb-eyetoy/usb-eyetoy-webcam.cpp
 	USB/usb-hid/usb-hid.cpp
@@ -1065,18 +1063,24 @@ endif()
 
 if(PCSX2_CORE)
 	list(APPEND pcsx2FrontendSources
+		Frontend/CommonHost.cpp
+		Frontend/FullscreenUI.cpp
 		Frontend/GameList.cpp
+		Frontend/HostSettings.cpp
+		Frontend/ImGuiFullscreen.cpp
 		Frontend/INISettingsInterface.cpp
 		Frontend/InputManager.cpp
 		Frontend/InputSource.cpp
 		Frontend/LayeredSettingsInterface.cpp
 		Frontend/LogSink.cpp
 		GSDumpReplayer.cpp
-		HostSettings.cpp
 		VMManager.cpp
 	)
 	list(APPEND pcsx2FrontendHeaders
+		Frontend/CommonHost.h
+		Frontend/FullscreenUI.h
 		Frontend/GameList.h
+		Frontend/ImGuiFullscreen.h
 		Frontend/INISettingsInterface.h
 		Frontend/InputManager.h
 		Frontend/InputSource.h
@@ -1589,6 +1593,9 @@ else()
 		target_sources(PCSX2 PRIVATE
 			${pcsx2USBSources}
 			${pcsx2USBHeaders})
+		target_link_libraries(PCSX2_FLAGS INTERFACE
+			jpgd
+		)
 	else()
 		target_sources(PCSX2 PRIVATE
 			${pcsx2USBNullSources}
@@ -1857,7 +1864,7 @@ function(setup_main_executable target)
 			get_filename_component(QT_BINARY_DIRECTORY "${MOC_EXECUTABLE_LOCATION}" DIRECTORY)
 			find_program(MACDEPLOYQT_EXE macdeployqt HINTS "${QT_BINARY_DIRECTORY}")
 			add_custom_target(pcsx2-postprocess-bundle ${postprocessBundleType}
-				COMMAND "${MACDEPLOYQT_EXE}" "$<TARGET_FILE_DIR:${target}>/../.."
+				COMMAND "${MACDEPLOYQT_EXE}" "$<TARGET_FILE_DIR:${target}>/../.." -no-strip
 			)
 		else()
 			add_custom_target(pcsx2-postprocess-bundle ${postprocessBundleType}

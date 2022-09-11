@@ -24,7 +24,7 @@
 #include "Settings/ControllerSettingsDialog.h"
 #include "Settings/ControllerSettingWidgetBinder.h"
 #include "Settings/SettingsDialog.h"
-#include "EmuThread.h"
+#include "QtHost.h"
 #include "QtUtils.h"
 #include "SettingWidgetBinder.h"
 
@@ -199,13 +199,17 @@ void ControllerBindingWidget::onClearBindingsClicked()
 	{
 		auto lock = Host::GetSettingsLock();
 		PAD::ClearPortBindings(*Host::Internal::GetBaseSettingsLayer(), m_port_number);
+		Host::CommitBaseSettingChanges();
 	}
 	else
 	{
 		PAD::ClearPortBindings(*m_dialog->getProfileSettingsInterface(), m_port_number);
+		m_dialog->getProfileSettingsInterface()->Save();
 	}
 
-	saveAndRefresh();
+	// force a refresh after clearing
+	g_emu_thread->applySettings();
+	onTypeChanged();
 }
 
 void ControllerBindingWidget::doDeviceAutomaticBinding(const QString& device)
@@ -221,28 +225,30 @@ void ControllerBindingWidget::doDeviceAutomaticBinding(const QString& device)
 	bool result;
 	if (m_dialog->isEditingGlobalSettings())
 	{
-		auto lock = Host::GetSettingsLock();
-		result = PAD::MapController(*Host::Internal::GetBaseSettingsLayer(), m_port_number, mapping);
+		{
+			auto lock = Host::GetSettingsLock();
+			result = PAD::MapController(*Host::Internal::GetBaseSettingsLayer(), m_port_number, mapping);
+		}
+		if (result)
+			Host::CommitBaseSettingChanges();
 	}
 	else
 	{
 		result = PAD::MapController(*m_dialog->getProfileSettingsInterface(), m_port_number, mapping);
-		m_dialog->getProfileSettingsInterface()->Save();
-		g_emu_thread->reloadInputBindings();
+		if (result)
+		{
+			m_dialog->getProfileSettingsInterface()->Save();
+			g_emu_thread->reloadInputBindings();
+		}
 	}
 
 	// force a refresh after mapping
 	if (result)
-		saveAndRefresh();
+	{
+		g_emu_thread->applySettings();
+		onTypeChanged();
+	}
 }
-
-void ControllerBindingWidget::saveAndRefresh()
-{
-	onTypeChanged();
-	QtHost::QueueSettingsSave();
-	g_emu_thread->applySettings();
-}
-
 
 //////////////////////////////////////////////////////////////////////////
 
@@ -483,14 +489,14 @@ void ControllerCustomSettingsWidget::createSettingWidgets(ControllerBindingWidge
 	for (u32 i = 0; i < cinfo->num_settings; i++)
 	{
 		const PAD::ControllerSettingInfo& si = cinfo->settings[i];
-		std::string key_name = si.key;
+		std::string key_name = si.name;
 
 		switch (si.type)
 		{
 			case PAD::ControllerSettingInfo::Type::Boolean:
 			{
-				QCheckBox* cb = new QCheckBox(qApp->translate(cinfo->name, si.visible_name), widget_parent);
-				cb->setObjectName(QString::fromUtf8(si.key));
+				QCheckBox* cb = new QCheckBox(qApp->translate(cinfo->name, si.display_name), widget_parent);
+				cb->setObjectName(QString::fromUtf8(si.name));
 				ControllerSettingWidgetBinder::BindWidgetToInputProfileBool(sif, cb, section, std::move(key_name),
 					si.BooleanDefaultValue());
 				layout->addWidget(cb, current_row, 0, 1, 4);
@@ -501,12 +507,12 @@ void ControllerCustomSettingsWidget::createSettingWidgets(ControllerBindingWidge
 			case PAD::ControllerSettingInfo::Type::Integer:
 			{
 				QSpinBox* sb = new QSpinBox(widget_parent);
-				sb->setObjectName(QString::fromUtf8(si.key));
+				sb->setObjectName(QString::fromUtf8(si.name));
 				sb->setMinimum(si.IntegerMinValue());
 				sb->setMaximum(si.IntegerMaxValue());
 				sb->setSingleStep(si.IntegerStepValue());
 				SettingWidgetBinder::BindWidgetToIntSetting(sif, sb, section, std::move(key_name), si.IntegerDefaultValue());
-				layout->addWidget(new QLabel(qApp->translate(cinfo->name, si.visible_name), widget_parent), current_row, 0);
+				layout->addWidget(new QLabel(qApp->translate(cinfo->name, si.display_name), widget_parent), current_row, 0);
 				layout->addWidget(sb, current_row, 1, 1, 3);
 				current_row++;
 			}
@@ -515,12 +521,12 @@ void ControllerCustomSettingsWidget::createSettingWidgets(ControllerBindingWidge
 			case PAD::ControllerSettingInfo::Type::Float:
 			{
 				QDoubleSpinBox* sb = new QDoubleSpinBox(widget_parent);
-				sb->setObjectName(QString::fromUtf8(si.key));
+				sb->setObjectName(QString::fromUtf8(si.name));
 				sb->setMinimum(si.FloatMinValue());
 				sb->setMaximum(si.FloatMaxValue());
 				sb->setSingleStep(si.FloatStepValue());
 				SettingWidgetBinder::BindWidgetToFloatSetting(sif, sb, section, std::move(key_name), si.FloatDefaultValue());
-				layout->addWidget(new QLabel(qApp->translate(cinfo->name, si.visible_name), widget_parent), current_row, 0);
+				layout->addWidget(new QLabel(qApp->translate(cinfo->name, si.display_name), widget_parent), current_row, 0);
 				layout->addWidget(sb, current_row, 1, 1, 3);
 				current_row++;
 			}
@@ -529,9 +535,9 @@ void ControllerCustomSettingsWidget::createSettingWidgets(ControllerBindingWidge
 			case PAD::ControllerSettingInfo::Type::String:
 			{
 				QLineEdit* le = new QLineEdit(widget_parent);
-				le->setObjectName(QString::fromUtf8(si.key));
+				le->setObjectName(QString::fromUtf8(si.name));
 				SettingWidgetBinder::BindWidgetToStringSetting(sif, le, section, std::move(key_name), si.StringDefaultValue());
-				layout->addWidget(new QLabel(qApp->translate(cinfo->name, si.visible_name), widget_parent), current_row, 0);
+				layout->addWidget(new QLabel(qApp->translate(cinfo->name, si.display_name), widget_parent), current_row, 0);
 				layout->addWidget(le, current_row, 1, 1, 3);
 				current_row++;
 			}
@@ -540,7 +546,7 @@ void ControllerCustomSettingsWidget::createSettingWidgets(ControllerBindingWidge
 			case PAD::ControllerSettingInfo::Type::Path:
 			{
 				QLineEdit* le = new QLineEdit(widget_parent);
-				le->setObjectName(QString::fromUtf8(si.key));
+				le->setObjectName(QString::fromUtf8(si.name));
 				QPushButton* browse_button = new QPushButton(tr("Browse..."), widget_parent);
 				SettingWidgetBinder::BindWidgetToStringSetting(sif, le, section, std::move(key_name), si.StringDefaultValue());
 				connect(browse_button, &QPushButton::clicked, [this, le]() {
@@ -553,7 +559,7 @@ void ControllerCustomSettingsWidget::createSettingWidgets(ControllerBindingWidge
 				hbox->addWidget(le, 1);
 				hbox->addWidget(browse_button);
 
-				layout->addWidget(new QLabel(qApp->translate(cinfo->name, si.visible_name), widget_parent), current_row, 0);
+				layout->addWidget(new QLabel(qApp->translate(cinfo->name, si.display_name), widget_parent), current_row, 0);
 				layout->addLayout(hbox, current_row, 1, 1, 3);
 				current_row++;
 			}
@@ -577,13 +583,13 @@ void ControllerCustomSettingsWidget::restoreDefaults()
 	for (u32 i = 0; i < cinfo->num_settings; i++)
 	{
 		const PAD::ControllerSettingInfo& si = cinfo->settings[i];
-		const QString key(QString::fromStdString(si.key));
+		const QString key(QString::fromStdString(si.name));
 
 		switch (si.type)
 		{
 			case PAD::ControllerSettingInfo::Type::Boolean:
 			{
-				QCheckBox* widget = findChild<QCheckBox*>(QString::fromStdString(si.key));
+				QCheckBox* widget = findChild<QCheckBox*>(QString::fromStdString(si.name));
 				if (widget)
 					widget->setChecked(si.BooleanDefaultValue());
 			}
@@ -591,7 +597,7 @@ void ControllerCustomSettingsWidget::restoreDefaults()
 
 			case PAD::ControllerSettingInfo::Type::Integer:
 			{
-				QSpinBox* widget = findChild<QSpinBox*>(QString::fromStdString(si.key));
+				QSpinBox* widget = findChild<QSpinBox*>(QString::fromStdString(si.name));
 				if (widget)
 					widget->setValue(si.IntegerDefaultValue());
 			}
@@ -599,7 +605,7 @@ void ControllerCustomSettingsWidget::restoreDefaults()
 
 			case PAD::ControllerSettingInfo::Type::Float:
 			{
-				QDoubleSpinBox* widget = findChild<QDoubleSpinBox*>(QString::fromStdString(si.key));
+				QDoubleSpinBox* widget = findChild<QDoubleSpinBox*>(QString::fromStdString(si.name));
 				if (widget)
 					widget->setValue(si.FloatDefaultValue());
 			}
@@ -607,7 +613,7 @@ void ControllerCustomSettingsWidget::restoreDefaults()
 
 			case PAD::ControllerSettingInfo::Type::String:
 			{
-				QLineEdit* widget = findChild<QLineEdit*>(QString::fromStdString(si.key));
+				QLineEdit* widget = findChild<QLineEdit*>(QString::fromStdString(si.name));
 				if (widget)
 					widget->setText(QString::fromUtf8(si.StringDefaultValue()));
 			}
@@ -615,7 +621,7 @@ void ControllerCustomSettingsWidget::restoreDefaults()
 
 			case PAD::ControllerSettingInfo::Type::Path:
 			{
-				QLineEdit* widget = findChild<QLineEdit*>(QString::fromStdString(si.key));
+				QLineEdit* widget = findChild<QLineEdit*>(QString::fromStdString(si.name));
 				if (widget)
 					widget->setText(QString::fromUtf8(si.StringDefaultValue()));
 			}
@@ -724,8 +730,6 @@ void ControllerBindingWidget_Base::initBindingWidgets()
 		ControllerSettingWidgetBinder::BindWidgetToInputProfileFloat(sif, widget, config_section, "SmallMotorScale", PAD::DEFAULT_MOTOR_SCALE);
 	if (QDoubleSpinBox* widget = findChild<QDoubleSpinBox*>(QStringLiteral("LargeMotorScale")); widget)
 		ControllerSettingWidgetBinder::BindWidgetToInputProfileFloat(sif, widget, config_section, "LargeMotorScale", PAD::DEFAULT_MOTOR_SCALE);
-	if (QDoubleSpinBox* widget = findChild<QDoubleSpinBox*>(QStringLiteral("PressureModifier")); widget)
-		ControllerSettingWidgetBinder::BindWidgetToInputProfileFloat(sif, widget, config_section, "PressureModifier", PAD::DEFAULT_PRESSURE_MODIFIER);
 }
 
 ControllerBindingWidget_DualShock2::ControllerBindingWidget_DualShock2(ControllerBindingWidget* parent)
